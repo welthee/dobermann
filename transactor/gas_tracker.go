@@ -1,4 +1,4 @@
-package dobermann
+package transactor
 
 import (
 	"context"
@@ -12,7 +12,16 @@ import (
 
 var ErrFailToGetResponseFromGasTracker = errors.New("failed to get a response from the gas tracker")
 
-type PolygonGasStationResponse struct {
+// GasTracker provides methods for gas tracking
+type GasTracker interface {
+	// GetSuggestedGasPriceFromGasTracker retrieve the network's suggested gas price
+	GetSuggestedGasPriceFromGasTracker(ctx context.Context) (*GasTrackerResponse, error)
+}
+
+// GasTrackerResponse contains gas price values in GWei,
+//'blockNumber' tells what was the latest block mined when recommendation was made
+//'blockTime' in second, which gives average block time of network
+type GasTrackerResponse struct {
 	SafeLow struct {
 		MaxPriorityFee float64 `json:"maxPriorityFee"`
 		MaxFee         float64 `json:"maxFee"`
@@ -30,7 +39,7 @@ type PolygonGasStationResponse struct {
 	BlockNumber      int     `json:"blockNumber"`
 }
 
-func (r PolygonGasStationResponse) String() string {
+func (r GasTrackerResponse) String() string {
 	marshal, err := json.Marshal(r)
 	if err != nil {
 		return ""
@@ -38,15 +47,15 @@ func (r PolygonGasStationResponse) String() string {
 	return string(marshal)
 }
 
-type PolygonGasTracker struct {
+type polygonGasTracker struct {
 	gasTrackerURL string
 }
 
-func NewPolygonGasTracker(url string) PolygonGasTracker {
-	return PolygonGasTracker{gasTrackerURL: url}
+func NewPolygonGasTracker(url string) GasTracker {
+	return polygonGasTracker{gasTrackerURL: url}
 }
 
-func (o PolygonGasTracker) getSuggestedGasPriceFromGasTracker(ctx context.Context) (*PolygonGasStationResponse, error) {
+func (o polygonGasTracker) GetSuggestedGasPriceFromGasTracker(ctx context.Context) (*GasTrackerResponse, error) {
 	resp, err := http.Get(o.gasTrackerURL)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", ErrFailToGetResponseFromGasTracker, err)
@@ -57,12 +66,12 @@ func (o PolygonGasTracker) getSuggestedGasPriceFromGasTracker(ctx context.Contex
 		return nil, err
 	}
 
-	var result PolygonGasStationResponse
+	var result GasTrackerResponse
 	err = json.Unmarshal(body, &result)
 	if err != nil {
 		return nil, err
 	}
 
-	log.Info().Str("response", result.String()).Msg("got from gas tracker")
+	log.Ctx(ctx).Info().Str("response", result.String()).Msg("got from gas tracker")
 	return &result, nil
 }

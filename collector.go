@@ -2,212 +2,229 @@ package dobermann
 
 import (
 	"context"
-	"github.com/aws/aws-sdk-go-v2/service/kms/types"
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/rs/zerolog/log"
+	"github.com/ethereum/go-ethereum/ethclient"
+	"github.com/welthee/dobermann/key"
+	"github.com/welthee/dobermann/nonce"
+	"github.com/welthee/dobermann/transactor"
 	"math/big"
 	"time"
 )
 
+const (
+	nonceTooLow                       = "nonce too low"
+	alreadyKnown                      = "already known"
+	replacementTransactionUnderpriced = "replacement transaction underpriced"
+)
+
+var (
+	StatusFail               Status            = "fail"
+	StatusSuccess            Status            = "success"
+	StatusPending            Status            = "pending"
+	StatusSkip               Status            = "skip"
+	NonceProviderTypeFixed   NonceProviderType = "fixed"
+	NonceProviderTypeNetwork NonceProviderType = "network"
+)
+
+//Collector provides method to collect ERC-20 tokens in a specific account from other given accounts
 type Collector interface {
-	Collect(ctx context.Context, collectionKey CollectionKey, keys []CollectionKey) ([]Result, error)
+	Collect(ctx context.Context, collectionAcount DestinationAccount, accounts []SourceAccount) []Result
+	GetChainId(ctx context.Context) *big.Int
 }
 
 type Status string
+type NonceProviderType string
 
-const (
-	StatusFail = "fail"
-	StatusSuccess = "success"
-	StatusPending = "pending"
-	StatusSkip = "skip"
-)
-
+// Result the outcome of the ERC-20 collection for a SourceAccount
 type Result struct {
-	Status Status
-	Hash   string
-	Key    CollectionKey
+	Status        Status
+	SourceAccount SourceAccount
 }
 
-type KmsKeyOptions struct {
-	KeyID               string
-	EncryptionAlgorithm types.EncryptionAlgorithmSpec
+// SourceAccount keeps the details of the account from which the tokens are collected
+type SourceAccount struct {
+	KeyProvider key.Provider
+	Token       string
+	Amount      string
 }
 
-var _ Options = &KmsKeyOptions{}
-
-type PrivateKeyOptions struct {
+// DestinationAccount which provides the gas for the collection and receives the ERC-20 tokens
+type DestinationAccount struct {
+	KeyProvider key.Provider
 }
 
-var _ Options = &PrivateKeyOptions{}
-
-type Options interface {
+//EVMCollectorConfig contains network configuration
+type EVMCollectorConfig struct {
+	BlockchainUrl     string
+	GasTrackerUrl     string
+	NonceProviderType NonceProviderType
 }
 
-type CollectionKey struct {
-	Key        string
-	KeyType    string
-	KeyOptions Options
-	Token      string
-	Amount     string
-}
-
-func NewPolygonCollector(transactor Transactor, factory DecrypterFactory) Collector {
-	return PolygonCollector{
-		transactor: transactor,
-		factory:    factory,
+// NewEVMCollector utility method to create a EVM collector
+// using the provided EVMCollectorConfig
+func NewEVMCollector(config EVMCollectorConfig) (Collector, error) {
+	client, err := ethclient.Dial(config.BlockchainUrl)
+	if err != nil {
+		return nil, err
 	}
-}
+	gasTracker := transactor.NewPolygonGasTracker(config.GasTrackerUrl)
 
-type PolygonCollector struct {
-	transactor Transactor
-	factory    DecrypterFactory
-}
+	var nonceProvider nonce.Provider
+	switch config.NonceProviderType {
+	case NonceProviderTypeNetwork:
+		nonceProvider = nonce.NewNetworkNonceProvider(client)
+	default:
+		nonceProvider = nonce.NewFixedNonceProvider(nil)
 
-func (k PolygonCollector) Collect(ctx context.Context, collectionKey CollectionKey, keys []CollectionKey) ([]Result, error) {
-	decriptedCollectionKey, err := decryptKey(ctx, k.factory, collectionKey)
+	}
+
+	chainId, err := client.ChainID(context.TODO())
+	if err != nil {
+		return nil, err
+	}
+	transactor, err := transactor.NewEvmTransactor(client, gasTracker, nonceProvider)
 	if err != nil {
 		return nil, err
 	}
 
-	var results []Result
+	return evmCollector{
+		transactor: transactor,
+		chainId:    chainId,
+	}, nil
+}
 
-	for _, key := range keys {
-		decryptedKey, err := decryptKey(ctx, k.factory, key)
+type evmCollector struct {
+	transactor transactor.Transactor
+	chainId    *big.Int
+}
+
+func (c evmCollector) GetChainId(ctx context.Context) *big.Int {
+	return c.chainId
+}
+
+func (c evmCollector) Collect(ctx context.Context, destinationAccount DestinationAccount, accounts []SourceAccount) []Result {
+	var results = make([]Result, 0)
+
+	for _, account := range accounts {
+
+		hasTokenToCollect, err := c.hasTokenToCollect(ctx, account.KeyProvider.GetAddress(), account)
 		if err != nil {
-			return nil, err
-		}
-
-		result := Result{Key: key}
-
-		toBeCollectedAccountAddr, err := k.transactor.GetAddressFromKey(decryptedKey)
-		if err != nil {
-			result.Status = StatusFail
-			results = append(results, result)
-			continue
-		}
-
-		hasTokenToCollect, err := k.hasTokenToCollect(ctx, toBeCollectedAccountAddr, key)
-		if err != nil {
-			result.Status = StatusFail
-			results = append(results, result)
+			results = append(results, getResult(account, StatusFail))
 			continue
 		}
 
 		if !hasTokenToCollect {
-			result.Status = StatusSkip
-			results = append(results, result)
-		}
-
-		gasTipCapValue, gasFeeCapValue, err := k.transactor.GetGasCapValues(ctx)
-		if err != nil {
-			result.Status = StatusFail
-			results = append(results, result)
+			results = append(results, getResult(account, StatusSkip))
 			continue
 		}
-		log.Info().
-			Str("gasTipCapValue", gasTipCapValue.String()).
-			Str("gasFeeCapValue", gasFeeCapValue.String()).
-			Msg("calculated fees")
 
-		ecr20TxParams := TxParams{
-			tokenAddr:      key.Token,
-			senderKey:      decryptedKey,
-			receiverKey:    decriptedCollectionKey,
-			amount:         key.Amount,
-			gasTipCapValue: gasTipCapValue,
-			gasFeeCapValue: gasFeeCapValue,
-		}
-		erc20Tx, err := k.transactor.CreateERC20Tx(ctx, ecr20TxParams)
+		gasTipCapValue, gasFeeCapValue, err := c.transactor.GetGasCapValues(ctx)
 		if err != nil {
-			result.Status = StatusFail
-			results = append(results, result)
+			results = append(results, getResult(account, StatusFail))
+			continue
+		}
+
+		ecr20TxParams := transactor.TxParams{
+			TokenAddr:           account.Token,
+			SenderKeyProvider:   account.KeyProvider,
+			ReceiverKeyProvider: destinationAccount.KeyProvider,
+			Amount:              account.Amount,
+			GasTipCapValue:      gasTipCapValue,
+			GasFeeCapValue:      gasFeeCapValue,
+		}
+		erc20Tx, err := c.transactor.CreateERC20Tx(ctx, ecr20TxParams)
+		if err != nil {
+			results = append(results, getResult(account, StatusFail))
 			continue
 		}
 		estimatedFee := new(big.Int).Add(new(big.Int).Mul(big.NewInt(int64(erc20Tx.Gas())), gasFeeCapValue), gasTipCapValue)
-		accountToBeCollectedBalance, err := k.transactor.BalanceAt(ctx, *toBeCollectedAccountAddr)
+		accountToBeCollectedBalance, err := c.transactor.BalanceAt(ctx, *account.KeyProvider.GetAddress())
 		if err != nil {
-			return nil, err
+			results = append(results, getResult(account, StatusFail))
+			continue
 		}
-		log.Info().
-			Str("estimatedFee", estimatedFee.String()).
-			Interface("accountToBeCollectedBalance", accountToBeCollectedBalance).
-			Msg("calculated fees")
+
 		if accountToBeCollectedBalance.Cmp(big.NewInt(0)) > 0 {
 			remainingFee := new(big.Int).Sub(estimatedFee, accountToBeCollectedBalance)
-			log.Info().
-				Str("remainingFee", remainingFee.String()).
-				Msg("calculated fees")
+
 			if remainingFee.Cmp(big.NewInt(0)) >= 0 {
-				nativTxParams := TxParams{
-					senderKey:      decriptedCollectionKey,
-					receiverKey:    decryptedKey,
-					amount:         remainingFee.String(),
-					gasTipCapValue: gasTipCapValue,
-					gasFeeCapValue: gasFeeCapValue,
+				nativTxParams := transactor.TxParams{
+					SenderKeyProvider:   destinationAccount.KeyProvider,
+					ReceiverKeyProvider: account.KeyProvider,
+					Amount:              remainingFee.String(),
+					GasTipCapValue:      gasTipCapValue,
+					GasFeeCapValue:      gasFeeCapValue,
 				}
-				nativTx, err := k.transactor.CreateTx(ctx, nativTxParams)
+				nativTx, err := c.transactor.CreateTx(ctx, nativTxParams)
 				if err != nil {
-					result.Status = StatusFail
-					results = append(results, result)
+					results = append(results, getResult(account, StatusFail))
 					continue
 				}
 
-				err = k.transactor.Transfer(ctx, nativTx)
+				err = c.transactor.Transfer(ctx, nativTx)
 				if err != nil {
-					result.Status = StatusFail
-					results = append(results, result)
+					results = append(results, getResult(account, StatusFail))
 					continue
 				}
 
 				timeoutCtx, cancelFunc := context.WithTimeout(ctx, 2*time.Minute)
 				defer cancelFunc()
-				isMined, err := k.transactor.VerifyTx(timeoutCtx, nativTx.Hash().Hex())
+				isMined, err := c.transactor.VerifyTx(timeoutCtx, nativTx.Hash().Hex())
 				if err != nil {
-					result.Status = StatusFail
-					results = append(results, result)
+					results = append(results, getResult(account, StatusFail))
 					continue
 				}
 
 				if !isMined {
-					result.Status = StatusFail
-					results = append(results, result)
+					results = append(results, getResult(account, StatusFail))
 					continue
 				}
 			}
 
 		}
-		log.Info().Str("tx", erc20Tx.Hash().Hex()).Msg("sending erc20 token tx")
 
-		err = k.transactor.Transfer(ctx, erc20Tx)
+		err = c.transactor.Transfer(ctx, erc20Tx)
 		if err != nil {
-			result.Status = StatusFail
-			results = append(results, result)
+			switch err.Error() {
+			case nonceTooLow:
+				results = append(results, getResult(account, StatusSkip))
+			case alreadyKnown:
+				fallthrough
+			case replacementTransactionUnderpriced:
+				results = append(results, getResult(account, StatusPending))
+			default:
+				results = append(results, getResult(account, StatusFail))
+			}
 			continue
 		}
 
 		timeoutCtx, cancelFunc := context.WithTimeout(ctx, 2*time.Minute)
 		defer cancelFunc()
-		isMined, err := k.transactor.VerifyTx(timeoutCtx, erc20Tx.Hash().Hex())
+		isMined, err := c.transactor.VerifyTx(timeoutCtx, erc20Tx.Hash().Hex())
 		if err != nil {
-			result.Status = StatusFail
-			results = append(results, result)
+			results = append(results, getResult(account, StatusFail))
 			continue
 		}
 		if !isMined {
-			result.Status = StatusPending
-			results = append(results, result)
+			results = append(results, getResult(account, StatusPending))
 			continue
 		}
-		result.Status = StatusSuccess
-		result.Hash = erc20Tx.Hash().Hex()
-		results = append(results, result)
+		results = append(results, getResult(account, StatusSuccess))
 	}
 
-	return results, err
+	return results
 }
 
-func (k PolygonCollector) hasTokenToCollect(ctx context.Context, toBeCollectedAccountAddr *common.Address, key CollectionKey) (bool, error) {
-	accountToBeCollectedERC20Balance, err := k.transactor.BalanceOf(ctx, *toBeCollectedAccountAddr, key.Token)
+func getResult(account SourceAccount, status Status) Result {
+	result := Result{
+		SourceAccount: account,
+		Status:        status,
+	}
+	return result
+}
+
+func (c evmCollector) hasTokenToCollect(ctx context.Context, toBeCollectedAccountAddr *common.Address, key SourceAccount) (bool, error) {
+	accountToBeCollectedERC20Balance, err := c.transactor.BalanceOf(ctx, *toBeCollectedAccountAddr, key.Token)
 	if err != nil {
 		return false, err
 	}
@@ -216,16 +233,4 @@ func (k PolygonCollector) hasTokenToCollect(ctx context.Context, toBeCollectedAc
 		return false, err
 	}
 	return true, nil
-}
-
-func decryptKey(ctx context.Context, factory DecrypterFactory, key CollectionKey) (string, error) {
-	decrypter, err := factory.GetDecrypter(key.KeyType)(key.KeyOptions)
-	if err != nil {
-		return "", err
-	}
-	decryptedKey, err := decrypter.Decrypt(ctx, key.Key)
-	if err != nil {
-		return "", err
-	}
-	return decryptedKey, nil
 }

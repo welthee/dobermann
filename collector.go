@@ -8,6 +8,7 @@ import (
 	"github.com/welthee/dobermann/nonce"
 	"github.com/welthee/dobermann/transactor"
 	"math/big"
+	"sync"
 	"time"
 )
 
@@ -105,112 +106,16 @@ func (c evmCollector) GetChainId(ctx context.Context) *big.Int {
 func (c evmCollector) Collect(ctx context.Context, destinationAccount DestinationAccount, accounts []SourceAccount) []Result {
 	var results = make([]Result, 0)
 
+	wg := sync.WaitGroup{}
 	for _, account := range accounts {
-
-		hasTokenToCollect, err := c.hasTokenToCollect(ctx, account.KeyProvider.GetAddress(), account)
-		if err != nil {
-			results = append(results, getResult(account, StatusFail))
-			continue
-		}
-
-		if !hasTokenToCollect {
-			results = append(results, getResult(account, StatusSkip))
-			continue
-		}
-
-		gasTipCapValue, gasFeeCapValue, err := c.transactor.GetGasCapValues(ctx)
-		if err != nil {
-			results = append(results, getResult(account, StatusFail))
-			continue
-		}
-
-		ecr20TxParams := transactor.TxParams{
-			TokenAddr:           account.Token,
-			SenderKeyProvider:   account.KeyProvider,
-			ReceiverKeyProvider: destinationAccount.KeyProvider,
-			Amount:              account.Amount,
-			GasTipCapValue:      gasTipCapValue,
-			GasFeeCapValue:      gasFeeCapValue,
-		}
-		erc20Tx, err := c.transactor.CreateERC20Tx(ctx, ecr20TxParams)
-		if err != nil {
-			results = append(results, getResult(account, StatusFail))
-			continue
-		}
-		estimatedFee := new(big.Int).Add(new(big.Int).Mul(big.NewInt(int64(erc20Tx.Gas())), gasFeeCapValue), gasTipCapValue)
-		accountToBeCollectedBalance, err := c.transactor.BalanceAt(ctx, *account.KeyProvider.GetAddress())
-		if err != nil {
-			results = append(results, getResult(account, StatusFail))
-			continue
-		}
-
-		if accountToBeCollectedBalance.Cmp(big.NewInt(0)) > 0 {
-			remainingFee := new(big.Int).Sub(estimatedFee, accountToBeCollectedBalance)
-
-			if remainingFee.Cmp(big.NewInt(0)) >= 0 {
-				nativTxParams := transactor.TxParams{
-					SenderKeyProvider:   destinationAccount.KeyProvider,
-					ReceiverKeyProvider: account.KeyProvider,
-					Amount:              remainingFee.String(),
-					GasTipCapValue:      gasTipCapValue,
-					GasFeeCapValue:      gasFeeCapValue,
-				}
-				nativTx, err := c.transactor.CreateTx(ctx, nativTxParams)
-				if err != nil {
-					results = append(results, getResult(account, StatusFail))
-					continue
-				}
-
-				err = c.transactor.Transfer(ctx, nativTx)
-				if err != nil {
-					results = append(results, getResult(account, StatusFail))
-					continue
-				}
-
-				timeoutCtx, cancelFunc := context.WithTimeout(ctx, 2*time.Minute)
-				defer cancelFunc()
-				isMined, err := c.transactor.VerifyTx(timeoutCtx, nativTx.Hash().Hex())
-				if err != nil {
-					results = append(results, getResult(account, StatusFail))
-					continue
-				}
-
-				if !isMined {
-					results = append(results, getResult(account, StatusFail))
-					continue
-				}
-			}
-
-		}
-
-		err = c.transactor.Transfer(ctx, erc20Tx)
-		if err != nil {
-			switch err.Error() {
-			case nonceTooLow:
-				results = append(results, getResult(account, StatusSkip))
-			case alreadyKnown:
-				fallthrough
-			case replacementTransactionUnderpriced:
-				results = append(results, getResult(account, StatusPending))
-			default:
-				results = append(results, getResult(account, StatusFail))
-			}
-			continue
-		}
-
-		timeoutCtx, cancelFunc := context.WithTimeout(ctx, 2*time.Minute)
-		defer cancelFunc()
-		isMined, err := c.transactor.VerifyTx(timeoutCtx, erc20Tx.Hash().Hex())
-		if err != nil {
-			results = append(results, getResult(account, StatusFail))
-			continue
-		}
-		if !isMined {
-			results = append(results, getResult(account, StatusPending))
-			continue
-		}
-		results = append(results, getResult(account, StatusSuccess))
+		wg.Add(1)
+		go func(account SourceAccount) {
+			defer wg.Done()
+			result := c.collect(ctx, account, destinationAccount)
+			results = append(results, result)
+		}(account)
 	}
+	wg.Wait()
 
 	return results
 }
@@ -233,4 +138,101 @@ func (c evmCollector) hasTokenToCollect(ctx context.Context, toBeCollectedAccoun
 		return false, err
 	}
 	return true, nil
+}
+
+func (c evmCollector) collect(ctx context.Context, account SourceAccount, destinationAccount DestinationAccount) Result {
+	hasTokenToCollect, err := c.hasTokenToCollect(ctx, account.KeyProvider.GetAddress(), account)
+	if err != nil {
+		return getResult(account, StatusFail)
+	}
+
+	if !hasTokenToCollect {
+		return getResult(account, StatusSkip)
+	}
+
+	gasTipCapValue, gasFeeCapValue, err := c.transactor.GetGasCapValues(ctx)
+	if err != nil {
+		return getResult(account, StatusFail)
+	}
+
+	ecr20TxParams := transactor.TxParams{
+		TokenAddr:           account.Token,
+		SenderKeyProvider:   account.KeyProvider,
+		ReceiverKeyProvider: destinationAccount.KeyProvider,
+		Amount:              account.Amount,
+		GasTipCapValue:      gasTipCapValue,
+		GasFeeCapValue:      gasFeeCapValue,
+	}
+	erc20Tx, err := c.transactor.CreateERC20Tx(ctx, ecr20TxParams)
+	if err != nil {
+		return getResult(account, StatusFail)
+	}
+	estimatedFee := new(big.Int).Add(new(big.Int).Mul(big.NewInt(int64(erc20Tx.Gas())), gasFeeCapValue), gasTipCapValue)
+	accountToBeCollectedBalance, err := c.transactor.BalanceAt(ctx, *account.KeyProvider.GetAddress())
+	if err != nil {
+		return getResult(account, StatusFail)
+
+	}
+
+	if accountToBeCollectedBalance.Cmp(big.NewInt(0)) > 0 {
+		remainingFee := new(big.Int).Sub(estimatedFee, accountToBeCollectedBalance)
+
+		if remainingFee.Cmp(big.NewInt(0)) >= 0 {
+			nativTxParams := transactor.TxParams{
+				SenderKeyProvider:   destinationAccount.KeyProvider,
+				ReceiverKeyProvider: account.KeyProvider,
+				Amount:              remainingFee.String(),
+				GasTipCapValue:      gasTipCapValue,
+				GasFeeCapValue:      gasFeeCapValue,
+			}
+			nativTx, err := c.transactor.CreateTx(ctx, nativTxParams)
+			if err != nil {
+				return getResult(account, StatusFail)
+			}
+
+			err = c.transactor.Transfer(ctx, nativTx)
+			if err != nil {
+				return getResult(account, StatusFail)
+			}
+
+			timeoutCtx, cancelFunc := context.WithTimeout(ctx, 2*time.Minute)
+			defer cancelFunc()
+			isMined, err := c.transactor.VerifyTx(timeoutCtx, nativTx.Hash().Hex())
+			if err != nil {
+				return getResult(account, StatusFail)
+			}
+
+			if !isMined {
+				return getResult(account, StatusFail)
+			}
+		}
+
+	}
+
+	err = c.transactor.Transfer(ctx, erc20Tx)
+	if err != nil {
+		switch err.Error() {
+		case nonceTooLow:
+			return getResult(account, StatusSkip)
+		case alreadyKnown:
+			fallthrough
+		case replacementTransactionUnderpriced:
+			return getResult(account, StatusPending)
+		default:
+			return getResult(account, StatusFail)
+		}
+	}
+
+	timeoutCtx, cancelFunc := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancelFunc()
+	isMined, err := c.transactor.VerifyTx(timeoutCtx, erc20Tx.Hash().Hex())
+	if err != nil {
+		return getResult(account, StatusFail)
+	}
+	if !isMined {
+		return getResult(account, StatusPending)
+
+	}
+	return getResult(account, StatusSuccess)
+
 }

@@ -1,0 +1,9 @@
+.idea/
+**/.DS_Store
+
+# binary created by 'go build cmd/main'
+main
+
+
+.vscode
+*.code-workspace

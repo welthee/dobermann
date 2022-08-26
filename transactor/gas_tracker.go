@@ -14,8 +14,8 @@ var ErrFailToGetResponseFromGasTracker = errors.New("failed to get a response fr
 
 // GasTracker provides methods for gas tracking
 type GasTracker interface {
-	// GetSuggestedGasPriceFromGasTracker retrieve the network's suggested gas price
-	GetSuggestedGasPriceFromGasTracker(ctx context.Context) (*GasTrackerResponse, error)
+	// GetSuggestedGasPrice retrieve the network's suggested gas price
+	GetSuggestedGasPrice(ctx context.Context) (*GasTrackerResponse, error)
 }
 
 // GasTrackerResponse contains gas price values in GWei,
@@ -55,7 +55,7 @@ func NewPolygonGasTracker(url string) GasTracker {
 	return polygonGasTracker{gasTrackerURL: url}
 }
 
-func (o polygonGasTracker) GetSuggestedGasPriceFromGasTracker(ctx context.Context) (*GasTrackerResponse, error) {
+func (o polygonGasTracker) GetSuggestedGasPrice(ctx context.Context) (*GasTrackerResponse, error) {
 	resp, err := http.Get(o.gasTrackerURL)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", ErrFailToGetResponseFromGasTracker, err)

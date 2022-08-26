@@ -215,7 +215,7 @@ func (t evmTransactor) BalanceOf(ctx context.Context, accountAddr common.Address
 }
 
 func (t evmTransactor) GetGasCapValues(ctx context.Context) (*big.Int, *big.Int, error) {
-	gasTrackerResponse, err := t.gasTracker.GetSuggestedGasPriceFromGasTracker(ctx)
+	gasTrackerResponse, err := t.gasTracker.GetSuggestedGasPrice(ctx)
 	if err != nil {
 		return nil, nil, err
 	}

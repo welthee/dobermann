@@ -5,7 +5,7 @@ go 1.18
 require (
 	github.com/aws/aws-sdk-go-v2 v1.16.16
 	github.com/aws/aws-sdk-go-v2/service/kms v1.17.5
-	github.com/ethereum/go-ethereum v1.10.20
+	github.com/ethereum/go-ethereum v1.10.25
 	github.com/rs/zerolog v1.27.0
 	github.com/stretchr/testify v1.7.2
 	github.com/welthee/go-ethereum-aws-kms-tx-signer/v2 v2.0.0-20220706133812-d6f783555300

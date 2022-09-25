@@ -27,7 +27,7 @@ var (
 	NonceProviderTypeNetwork NonceProviderType = "network"
 )
 
-//Collector provides method to collect ERC-20 tokens in a specific account from other given accounts
+// Collector provides method to collect ERC-20 tokens in a specific account from other given accounts
 type Collector interface {
 	Collect(ctx context.Context, collectionAcount DestinationAccount, accounts []SourceAccount) []Result
 	GetChainId(ctx context.Context) *big.Int
@@ -54,7 +54,7 @@ type DestinationAccount struct {
 	KeyProvider key.Provider
 }
 
-//EVMCollectorConfig contains network configuration
+// EVMCollectorConfig contains network configuration
 type EVMCollectorConfig struct {
 	BlockchainUrl     string
 	GasTrackerUrl     string
@@ -171,40 +171,37 @@ func (c evmCollector) collect(ctx context.Context, account SourceAccount, destin
 	accountToBeCollectedBalance, err := c.transactor.BalanceAt(ctx, *account.KeyProvider.GetAddress())
 	if err != nil {
 		return getResult(account, StatusFail)
-
 	}
 
-	if accountToBeCollectedBalance.Cmp(big.NewInt(0)) > 0 {
-		remainingFee := new(big.Int).Sub(estimatedFee, accountToBeCollectedBalance)
+	remainingFee := new(big.Int).Sub(estimatedFee, accountToBeCollectedBalance)
 
-		if remainingFee.Cmp(big.NewInt(0)) >= 0 {
-			nativTxParams := transactor.TxParams{
-				SenderKeyProvider:   destinationAccount.KeyProvider,
-				ReceiverKeyProvider: account.KeyProvider,
-				Amount:              remainingFee.String(),
-				GasTipCapValue:      gasTipCapValue,
-				GasFeeCapValue:      gasFeeCapValue,
-			}
-			nativTx, err := c.transactor.CreateTx(ctx, nativTxParams)
-			if err != nil {
-				return getResult(account, StatusFail)
-			}
+	if remainingFee.Cmp(big.NewInt(0)) > 0 {
+		nativTxParams := transactor.TxParams{
+			SenderKeyProvider:   destinationAccount.KeyProvider,
+			ReceiverKeyProvider: account.KeyProvider,
+			Amount:              remainingFee.String(),
+			GasTipCapValue:      gasTipCapValue,
+			GasFeeCapValue:      gasFeeCapValue,
+		}
+		nativTx, err := c.transactor.CreateTx(ctx, nativTxParams)
+		if err != nil {
+			return getResult(account, StatusFail)
+		}
 
-			err = c.transactor.Transfer(ctx, nativTx)
-			if err != nil {
-				return getResult(account, StatusFail)
-			}
+		err = c.transactor.Transfer(ctx, nativTx)
+		if err != nil {
+			return getResult(account, StatusFail)
+		}
 
-			timeoutCtx, cancelFunc := context.WithTimeout(ctx, 2*time.Minute)
-			defer cancelFunc()
-			isMined, err := c.transactor.VerifyTx(timeoutCtx, nativTx.Hash().Hex())
-			if err != nil {
-				return getResult(account, StatusFail)
-			}
+		timeoutCtx, cancelFunc := context.WithTimeout(ctx, 2*time.Minute)
+		defer cancelFunc()
+		isMined, err := c.transactor.VerifyTx(timeoutCtx, nativTx.Hash().Hex())
+		if err != nil {
+			return getResult(account, StatusFail)
+		}
 
-			if !isMined {
-				return getResult(account, StatusFail)
-			}
+		if !isMined {
+			return getResult(account, StatusFail)
 		}
 
 	}

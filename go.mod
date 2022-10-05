@@ -9,7 +9,7 @@ require (
 	github.com/rs/zerolog v1.27.0
 	github.com/stretchr/testify v1.7.2
 	github.com/welthee/go-ethereum-aws-kms-tx-signer/v2 v2.0.0-20220706133812-d6f783555300
-	golang.org/x/crypto v0.0.0-20220924013350-4ba4fb4dd9e7
+	golang.org/x/crypto v0.0.0-20221005025214-4161e89ecf1b
 )
 
 require (

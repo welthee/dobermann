@@ -11,7 +11,6 @@ import (
 	"github.com/welthee/dobermann/transactor"
 	"math/big"
 	"os"
-	"sync"
 	"time"
 )
 
@@ -124,31 +123,11 @@ func (c evmCollector) GetChainId(ctx context.Context) *big.Int {
 func (c evmCollector) Collect(ctx context.Context, destinationAccount DestinationAccount, accounts []SourceAccount) []Result {
 	var results = make([]Result, 0)
 
-	wg := sync.WaitGroup{}
-	resultChan := make(chan Result)
-
 	for _, account := range accounts {
-		wg.Add(1)
-		go process(ctx, c, account, destinationAccount, &wg, resultChan)
-	}
-
-	go func() {
-		wg.Wait()
-		close(resultChan)
-	}()
-
-	for r := range resultChan {
-		results = append(results, r)
+		results = append(results, c.collect(ctx, account, destinationAccount))
 	}
 
 	return results
-}
-
-func process(ctx context.Context, c evmCollector, account SourceAccount, destinationAccount DestinationAccount,
-	wg *sync.WaitGroup, resultChan chan<- Result) {
-	defer wg.Done()
-
-	resultChan <- c.collect(ctx, account, destinationAccount)
 }
 
 func (c evmCollector) hasTokenToCollect(ctx context.Context, toBeCollectedAccountAddr *common.Address, key SourceAccount) (bool, error) {

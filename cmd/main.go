@@ -19,6 +19,7 @@ func main() {
 		BlockchainUrl:     blockchainUrl,
 		GasTrackerUrl:     gasTrackerUrl,
 		NonceProviderType: dobermann.NonceProviderTypeNetwork,
+		LoggerLevel:       "debug",
 	}
 	collector, err := dobermann.NewEVMCollector(config)
 	if err != nil {

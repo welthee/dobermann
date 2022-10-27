@@ -4,10 +4,13 @@ import (
 	"context"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethclient"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/welthee/dobermann/key"
 	"github.com/welthee/dobermann/nonce"
 	"github.com/welthee/dobermann/transactor"
 	"math/big"
+	"os"
 	"sync"
 	"time"
 )
@@ -16,6 +19,7 @@ const (
 	nonceTooLow                       = "nonce too low"
 	alreadyKnown                      = "already known"
 	replacementTransactionUnderpriced = "replacement transaction underpriced"
+	minLogLevel                       = zerolog.Disabled
 )
 
 var (
@@ -59,11 +63,25 @@ type EVMCollectorConfig struct {
 	BlockchainUrl     string
 	GasTrackerUrl     string
 	NonceProviderType NonceProviderType
+	LoggerKind        string
+	LoggerLevel       string
 }
 
 // NewEVMCollector utility method to create a EVM collector
 // using the provided EVMCollectorConfig
 func NewEVMCollector(config EVMCollectorConfig) (Collector, error) {
+	logLevel, err := zerolog.ParseLevel(config.LoggerLevel)
+	if err != nil {
+		logLevel = minLogLevel
+	}
+	switch config.LoggerKind {
+	case "console":
+		log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr}).Level(logLevel)
+	default:
+		log.Debug().Msg("using json logger")
+	}
+	zerolog.DefaultContextLogger = &log.Logger
+
 	client, err := ethclient.Dial(config.BlockchainUrl)
 	if err != nil {
 		return nil, err
@@ -107,25 +125,30 @@ func (c evmCollector) Collect(ctx context.Context, destinationAccount Destinatio
 	var results = make([]Result, 0)
 
 	wg := sync.WaitGroup{}
+	resultChan := make(chan Result)
+
 	for _, account := range accounts {
 		wg.Add(1)
-		go func(account SourceAccount) {
-			defer wg.Done()
-			result := c.collect(ctx, account, destinationAccount)
-			results = append(results, result)
-		}(account)
+		go process(ctx, c, account, destinationAccount, &wg, resultChan)
 	}
-	wg.Wait()
+
+	go func() {
+		wg.Wait()
+		close(resultChan)
+	}()
+
+	for r := range resultChan {
+		results = append(results, r)
+	}
 
 	return results
 }
 
-func getResult(account SourceAccount, status Status) Result {
-	result := Result{
-		SourceAccount: account,
-		Status:        status,
-	}
-	return result
+func process(ctx context.Context, c evmCollector, account SourceAccount, destinationAccount DestinationAccount,
+	wg *sync.WaitGroup, resultChan chan<- Result) {
+	defer wg.Done()
+
+	resultChan <- c.collect(ctx, account, destinationAccount)
 }
 
 func (c evmCollector) hasTokenToCollect(ctx context.Context, toBeCollectedAccountAddr *common.Address, key SourceAccount) (bool, error) {
@@ -143,16 +166,16 @@ func (c evmCollector) hasTokenToCollect(ctx context.Context, toBeCollectedAccoun
 func (c evmCollector) collect(ctx context.Context, account SourceAccount, destinationAccount DestinationAccount) Result {
 	hasTokenToCollect, err := c.hasTokenToCollect(ctx, account.KeyProvider.GetAddress(), account)
 	if err != nil {
-		return getResult(account, StatusFail)
+		return handleError(ctx, account, err)
 	}
 
 	if !hasTokenToCollect {
-		return getResult(account, StatusSkip)
+		return getResult(ctx, account, StatusSkip)
 	}
 
 	gasTipCapValue, gasFeeCapValue, err := c.transactor.GetGasCapValues(ctx)
 	if err != nil {
-		return getResult(account, StatusFail)
+		return handleError(ctx, account, err)
 	}
 
 	ecr20TxParams := transactor.TxParams{
@@ -165,12 +188,12 @@ func (c evmCollector) collect(ctx context.Context, account SourceAccount, destin
 	}
 	erc20Tx, err := c.transactor.CreateERC20Tx(ctx, ecr20TxParams)
 	if err != nil {
-		return getResult(account, StatusFail)
+		return handleError(ctx, account, err)
 	}
 	estimatedFee := new(big.Int).Add(new(big.Int).Mul(big.NewInt(int64(erc20Tx.Gas())), gasFeeCapValue), gasTipCapValue)
 	accountToBeCollectedBalance, err := c.transactor.BalanceAt(ctx, *account.KeyProvider.GetAddress())
 	if err != nil {
-		return getResult(account, StatusFail)
+		return handleError(ctx, account, err)
 	}
 
 	remainingFee := new(big.Int).Sub(estimatedFee, accountToBeCollectedBalance)
@@ -185,23 +208,23 @@ func (c evmCollector) collect(ctx context.Context, account SourceAccount, destin
 		}
 		nativTx, err := c.transactor.CreateTx(ctx, nativTxParams)
 		if err != nil {
-			return getResult(account, StatusFail)
+			return handleError(ctx, account, err)
 		}
 
 		err = c.transactor.Transfer(ctx, nativTx)
 		if err != nil {
-			return getResult(account, StatusFail)
+			return handleError(ctx, account, err)
 		}
 
 		timeoutCtx, cancelFunc := context.WithTimeout(ctx, 2*time.Minute)
 		defer cancelFunc()
 		isMined, err := c.transactor.VerifyTx(timeoutCtx, nativTx.Hash().Hex())
 		if err != nil {
-			return getResult(account, StatusFail)
+			return handleError(ctx, account, err)
 		}
 
 		if !isMined {
-			return getResult(account, StatusFail)
+			return handleError(ctx, account, err)
 		}
 
 	}
@@ -210,13 +233,13 @@ func (c evmCollector) collect(ctx context.Context, account SourceAccount, destin
 	if err != nil {
 		switch err.Error() {
 		case nonceTooLow:
-			return getResult(account, StatusSkip)
+			return getResult(ctx, account, StatusSkip)
 		case alreadyKnown:
 			fallthrough
 		case replacementTransactionUnderpriced:
-			return getResult(account, StatusPending)
+			return getResult(ctx, account, StatusPending)
 		default:
-			return getResult(account, StatusFail)
+			return handleError(ctx, account, err)
 		}
 	}
 
@@ -224,12 +247,31 @@ func (c evmCollector) collect(ctx context.Context, account SourceAccount, destin
 	defer cancelFunc()
 	isMined, err := c.transactor.VerifyTx(timeoutCtx, erc20Tx.Hash().Hex())
 	if err != nil {
-		return getResult(account, StatusFail)
+		return handleError(ctx, account, err)
 	}
 	if !isMined {
-		return getResult(account, StatusPending)
+		return getResult(ctx, account, StatusPending)
 
 	}
-	return getResult(account, StatusSuccess)
+	return getResult(ctx, account, StatusSuccess)
 
+}
+
+func getResult(ctx context.Context, account SourceAccount, status Status) Result {
+	result := Result{
+		SourceAccount: account,
+		Status:        status,
+	}
+	log.Ctx(ctx).Debug().
+		Str("account", account.KeyProvider.GetAddress().Hex()).
+		Str("status", string(status)).
+		Msg("got result")
+	return result
+}
+
+func handleError(ctx context.Context, account SourceAccount, err error) Result {
+	log.Ctx(ctx).Debug().Err(err).
+		Str("account", account.KeyProvider.GetAddress().Hex()).
+		Msg("got error")
+	return getResult(ctx, account, StatusFail)
 }

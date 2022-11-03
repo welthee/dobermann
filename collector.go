@@ -169,7 +169,7 @@ func (c evmCollector) collect(ctx context.Context, account SourceAccount, destin
 		TokenAddr:           account.Token,
 		SenderKeyProvider:   account.KeyProvider,
 		ReceiverKeyProvider: destinationAccount.KeyProvider,
-		Amount:              account.Amount,
+		Amount:              amount,
 		GasTipCapValue:      gasTipCapValue,
 		GasFeeCapValue:      gasFeeCapValue,
 	}

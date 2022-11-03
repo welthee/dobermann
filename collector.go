@@ -2,6 +2,7 @@ package dobermann
 
 import (
 	"context"
+	"errors"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/rs/zerolog"
@@ -130,26 +131,33 @@ func (c evmCollector) Collect(ctx context.Context, destinationAccount Destinatio
 	return results
 }
 
-func (c evmCollector) hasTokenToCollect(ctx context.Context, toBeCollectedAccountAddr *common.Address, key SourceAccount) (bool, error) {
+func (c evmCollector) getTokenBalance(ctx context.Context, toBeCollectedAccountAddr *common.Address, key SourceAccount) (*big.Int, error) {
 	accountToBeCollectedERC20Balance, err := c.transactor.BalanceOf(ctx, *toBeCollectedAccountAddr, key.Token)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 
-	if accountToBeCollectedERC20Balance.Cmp(big.NewInt(0)) == 0 {
-		return false, err
-	}
-	return true, nil
+	return accountToBeCollectedERC20Balance, nil
 }
 
 func (c evmCollector) collect(ctx context.Context, account SourceAccount, destinationAccount DestinationAccount) Result {
-	hasTokenToCollect, err := c.hasTokenToCollect(ctx, account.KeyProvider.GetAddress(), account)
+	tokenBalance, err := c.getTokenBalance(ctx, account.KeyProvider.GetAddress(), account)
 	if err != nil {
 		return handleError(ctx, account, err)
 	}
 
-	if !hasTokenToCollect {
+	if tokenBalance.Cmp(big.NewInt(0)) == 0 {
 		return getResult(ctx, account, StatusSkip)
+	}
+
+	amount := account.Amount
+	if amount != "" {
+		a, _ := new(big.Int).SetString(amount, 10)
+		if tokenBalance.Cmp(a) < 0 {
+			return handleError(ctx, account, errors.New("insufficient balance"))
+		}
+	} else {
+		amount = tokenBalance.String()
 	}
 
 	gasTipCapValue, gasFeeCapValue, err := c.transactor.GetGasCapValues(ctx)

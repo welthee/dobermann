@@ -7,7 +7,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/kms v1.20.1
 	github.com/ethereum/go-ethereum v1.10.26
 	github.com/rs/zerolog v1.29.0
-	github.com/welthee/go-ethereum-aws-kms-tx-signer/v2 v2.0.0-20230104103114-6b3012d26842
+	github.com/welthee/go-ethereum-aws-kms-tx-signer/v2 v2.0.0-20230201072418-e9c65c169772
 	golang.org/x/crypto v0.5.0
 )
 

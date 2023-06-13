@@ -4,11 +4,11 @@ go 1.19
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.18.0
-	github.com/aws/aws-sdk-go-v2/service/kms v1.21.1
+	github.com/aws/aws-sdk-go-v2/service/kms v1.22.0
 	github.com/ethereum/go-ethereum v1.12.0
 	github.com/rs/zerolog v1.29.1
 	github.com/welthee/go-ethereum-aws-kms-tx-signer/v2 v2.0.0-20230505052131-e87e5ad77a00
-	golang.org/x/crypto v0.9.0
+	golang.org/x/crypto v0.10.0
 )
 
 require (
@@ -32,6 +32,6 @@ require (
 	github.com/tklauser/go-sysconf v0.3.10 // indirect
 	github.com/tklauser/numcpus v0.5.0 // indirect
 	github.com/yusufpapurcu/wmi v1.2.2 // indirect
-	golang.org/x/sys v0.8.0 // indirect
+	golang.org/x/sys v0.9.0 // indirect
 	gopkg.in/natefinch/npipe.v2 v2.0.0-20160621034901-c1b8fa8bdcce // indirect
 )

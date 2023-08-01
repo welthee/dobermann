@@ -4,10 +4,10 @@ go 1.20
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.20.0
-	github.com/aws/aws-sdk-go-v2/service/kms v1.24.0
+	github.com/aws/aws-sdk-go-v2/service/kms v1.24.1
 	github.com/ethereum/go-ethereum v1.12.0
 	github.com/rs/zerolog v1.30.0
-	github.com/welthee/go-ethereum-aws-kms-tx-signer/v2 v2.0.0-20230703152713-79b6301f8e19
+	github.com/welthee/go-ethereum-aws-kms-tx-signer/v2 v2.0.0-20230801130021-6442de044b07
 	golang.org/x/crypto v0.11.0
 )
 

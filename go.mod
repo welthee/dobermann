@@ -3,18 +3,18 @@ module github.com/welthee/dobermann
 go 1.20
 
 require (
-	github.com/aws/aws-sdk-go-v2 v1.18.1
-	github.com/aws/aws-sdk-go-v2/service/kms v1.22.2
+	github.com/aws/aws-sdk-go-v2 v1.20.0
+	github.com/aws/aws-sdk-go-v2/service/kms v1.24.0
 	github.com/ethereum/go-ethereum v1.12.0
-	github.com/rs/zerolog v1.29.1
-	github.com/welthee/go-ethereum-aws-kms-tx-signer/v2 v2.0.0-20230630070649-8c81f490b498
-	golang.org/x/crypto v0.10.0
+	github.com/rs/zerolog v1.30.0
+	github.com/welthee/go-ethereum-aws-kms-tx-signer/v2 v2.0.0-20230703152713-79b6301f8e19
+	golang.org/x/crypto v0.11.0
 )
 
 require (
-	github.com/aws/aws-sdk-go-v2/internal/configsources v1.1.34 // indirect
-	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.4.28 // indirect
-	github.com/aws/smithy-go v1.13.5 // indirect
+	github.com/aws/aws-sdk-go-v2/internal/configsources v1.1.37 // indirect
+	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.4.31 // indirect
+	github.com/aws/smithy-go v1.14.0 // indirect
 	github.com/btcsuite/btcd/btcec/v2 v2.2.0 // indirect
 	github.com/deckarep/golang-set/v2 v2.1.0 // indirect
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.0.1 // indirect
@@ -32,6 +32,6 @@ require (
 	github.com/tklauser/go-sysconf v0.3.10 // indirect
 	github.com/tklauser/numcpus v0.5.0 // indirect
 	github.com/yusufpapurcu/wmi v1.2.2 // indirect
-	golang.org/x/sys v0.9.0 // indirect
+	golang.org/x/sys v0.10.0 // indirect
 	gopkg.in/natefinch/npipe.v2 v2.0.0-20160621034901-c1b8fa8bdcce // indirect
 )
